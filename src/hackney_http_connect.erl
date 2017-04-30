@@ -19,8 +19,6 @@
   shutdown/2,
   sockname/1]).
 
--define(TIMEOUT, infinity).
-
 -type http_socket() :: {atom(), inet:socket()}.
 -export_type([http_socket/0]).
 
@@ -51,9 +49,9 @@ connect(ProxyHost, ProxyPort, Opts, Timeout)
   ConnectOpts = hackney_util:filter_options(Opts, AcceptedOpts, BaseOpts),
   
   %% connnect to the proxy, and upgrade the socket if needed.
-  case gen_tcp:connect(ProxyHost, ProxyPort, ConnectOpts) of
+  case gen_tcp:connect(ProxyHost, ProxyPort, ConnectOpts, Timeout) of
     {ok, Socket} ->
-      case do_handshake(Socket, Host, Port, Opts) of
+      case do_handshake(Socket, Host, Port, Opts, Timeout) of
         ok ->
           %% if we are connecting to a remote https source, we
           %% upgrade the connection socket to handle SSL.
@@ -61,7 +59,7 @@ connect(ProxyHost, ProxyPort, Opts, Timeout)
             hackney_ssl ->
               SSLOpts = hackney_connect:ssl_opts(Host, Opts),
               %% upgrade the tcp connection
-              case ssl:connect(Socket, SSLOpts) of
+              case ssl:connect(Socket, SSLOpts, Timeout) of
                 {ok, SslSocket} ->
                   {ok, {Transport, SslSocket}};
                 Error ->
@@ -137,7 +135,7 @@ sockname({Transport, Socket}) ->
   Transport:sockname(Socket).
 
 %% private functions
-do_handshake(Socket, Host, Port, Options) ->
+do_handshake(Socket, Host, Port, Options, Timeout) ->
   ProxyUser = proplists:get_value(connect_user, Options),
   ProxyPass = proplists:get_value(connect_pass, Options, <<>>),
   ProxyPort = proplists:get_value(connect_port, Options),
@@ -168,13 +166,13 @@ do_handshake(Socket, Host, Port, Options) ->
     <<"\r\n\r\n">>],
   case gen_tcp:send(Socket, Payload) of
     ok ->
-      check_response(Socket);
+      check_response(Socket, Timeout);
     Error ->
       Error
   end.
 
-check_response(Socket) ->
-  case gen_tcp:recv(Socket, 0, ?TIMEOUT) of
+check_response(Socket, Timeout) ->
+  case gen_tcp:recv(Socket, 0, Timeout) of
     {ok, Data} ->
       check_status(Data);
     Error ->
@@ -189,6 +187,5 @@ check_status(<< "HTTP/1.0 200", _/bits >>) ->
   ok;
 check_status(<< "HTTP/1.0 201", _/bits >>) ->
   ok;
-check_status(Else) ->
-  error_logger:error_msg("proxy error: ~w~n", [Else]),
-  {error, proxy_error}.
+check_status(_) ->
+  {error, no_connection}.
